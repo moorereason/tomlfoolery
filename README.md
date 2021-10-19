@@ -34,6 +34,6 @@ whether the tests cases from `toml-test` will be added as seeds to the fuzzer.
 
 ## Thanks
 
-A special thanks goes out to Martin Tournoij for creating the
+A special thanks goes out to Andrew Gallant and Martin Tournoij for creating the
 [toml-test](https://github.com/BurntSushi/toml-test/) framework, which made this
 proof-of-concept a simple endeavor.
