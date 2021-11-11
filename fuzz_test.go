@@ -3,6 +3,7 @@
 package tomlfoolery
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -14,28 +15,12 @@ import (
 )
 
 func FuzzUnmarshal(f *testing.F) {
-	addTomlTestCases := false
+	addTomlTestCases := true
 
 	if addTomlTestCases {
 		skipTests := []string{
-			"valid/datetime/datetime.toml",
-			"valid/datetime/local.toml",
-			"valid/datetime/local-time.toml",
-			"valid/float/zero.toml",
-			"valid/string/multiline.toml",
-			"valid/string/multiline-quotes.toml",
-			"invalid/datetime/impossible-date.toml",
-			"invalid/float/exp-leading-us.toml",
-			"invalid/float/exp-point-2.toml",
-			"invalid/float/leading-point-neg.toml",
-			"invalid/float/leading-point-plus.toml",
-			"invalid/float/leading-zero-neg.toml",
-			"invalid/float/leading-zero-plus.toml",
-			"invalid/float/us-after-point.toml",
-			"invalid/float/us-before-point.toml",
-			"invalid/integer/leading-zero-sign-1.toml",
-			"invalid/integer/leading-zero-sign-2.toml",
-			"invalid/string/multiline-escape-space.toml",
+			"invalid/table/injection-1.toml",
+			"invalid/table/injection-2.toml",
 		}
 
 		// Add embedded tests
@@ -70,27 +55,27 @@ func FuzzUnmarshal(f *testing.F) {
 
 	for _, s := range []string{
 		`[dog."tater.man"]
-	type.name = "pug"`,
+		type.name = "pug"`,
 		`[ j . "ʞ" . 'l' ]`,
 		`[[a.b]]
-	a='b'`,
+		a='b'`,
 		"[table]\nhello = 'world'",
-		//`a=1979-05-27T00:32:00-07:00`,
+		`a=1979-05-27T00:32:00-07:00`,
 		`a={f="1",b.c=3}`,
 		`a="\\\n\t\""`,
 		`a. b="c"`,
 		`'"a"' = 1`,
 		`"\"b\"" = 2`,
 		`A = """\
-						Test"""`,
+							Test"""`,
 		`a=1z=2`,
 		`a="Name\tJos\u00E9\nLoc\tSF."`,
 		`contributors = [
-	  "Foo Bar <foo@example.com>",
-	  { name = "Baz Qux", email = "bazqux@example.com", url = "https://example.com/bazqux" }
-	]`,
-		// `foo = 2021-04-08`,
-		// `a=20x1-05-21`,
+		  "Foo Bar <foo@example.com>",
+		  { name = "Baz Qux", email = "bazqux@example.com", url = "https://example.com/bazqux" }
+		]`,
+		`foo = 2021-04-08`,
+		`a=20x1-05-21`,
 		`a=1_`,
 		`a=0bfa`,
 		`a=0o62`,
@@ -99,12 +84,12 @@ func FuzzUnmarshal(f *testing.F) {
 		`a=1__2`,
 		`a=4e+9`,
 		`a=-4e-2`,
-		// `a=inf`,
-		// `a=+inf`,
-		// `a=-inf`,
-		// `a=nan`,
-		// `a=+nan`,
-		// `a=-nan`,
+		`a=inf`,
+		`a=+inf`,
+		`a=-inf`,
+		`a=nan`,
+		`a=+nan`,
+		`a=-nan`,
 		`a=[1, 2, "b"]`,
 	} {
 		f.Add([]byte(s))
@@ -114,6 +99,15 @@ func FuzzUnmarshal(f *testing.F) {
 	bCmd, bCmdr := makeCommandParser(f, "B")
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		// FIXME: BurntSushi has some bugs.  Remove these checks later:
+		//
+		//   "\x00" - https://github.com/BurntSushi/toml/issues/317
+		//   "\xff" - https://github.com/BurntSushi/toml/issues/317
+		//   "\r" - https://github.com/BurntSushi/toml/issues/321
+		if strings.ContainsAny(string(data), "\x00\xff\r") {
+			t.Skip()
+		}
+
 		a, aOutErr, aErr := aCmdr.Encode(string(data))
 		b, bOutErr, bErr := bCmdr.Encode(string(data))
 
@@ -124,19 +118,33 @@ func FuzzUnmarshal(f *testing.F) {
 			t.Fatal(bErr)
 		}
 
-		if aOutErr != bOutErr && !strings.ContainsRune(string(data), '\r') {
+		// If both decoders return an error, consider the input uninteresting.
+		if aOutErr && bOutErr {
+			return
+		}
+
+		if aOutErr != bOutErr {
 			t.Fatalf("output errors differ:\ninput:\n\t%q\n%s (outErr=%t):\n%v\n%s (outErr=%t):\n%v\n", data, aCmd, aOutErr, a, bCmd, bOutErr, b)
 		}
-		if aOutErr {
-			return
+
+		// convert JSON to maps
+		var amap map[string]interface{}
+		err := json.Unmarshal([]byte(a), &amap)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var bmap map[string]interface{}
+		err = json.Unmarshal([]byte(b), &bmap)
+		if err != nil {
+			t.Fatal(err)
 		}
 
 		r := tomltest.Test{}
 
-		rt := r.CompareTOML(a, b)
+		rt := r.CompareJSON(amap, bmap)
 		if rt.Failure != "" {
-			fmt.Printf("for input %q, output differs:\n%s:\n%v\n%s:\n%v\n", data, a, aCmd, b, bCmd)
-			t.Fatalf("%#v\n", rt)
+			t.Errorf("for input %q, output differs:\n%s:\n%v\n%s:\n%v\n\nFailure: %s\n", data, aCmd, a, bCmd, b, rt.Failure)
 		}
 	})
 }
